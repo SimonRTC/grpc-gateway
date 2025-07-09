@@ -3,8 +3,10 @@ package descriptor
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
+	ragnarok "github.com/OVH-Goldorack/ragnarok/protoc/descriptors"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/internal/httprule"
 	options "google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/grpc/grpclog"
@@ -33,7 +35,7 @@ func (r *Registry) loadServices(file *File) error {
 			if grpclog.V(2) {
 				grpclog.Infof("Processing %s.%s", sd.GetName(), md.GetName())
 			}
-			opts, err := extractAPIOptions(md)
+			opts, err := extractAPIOptions(svc, md)
 			if err != nil {
 				grpclog.Errorf("Failed to extract HttpRule from %s.%s: %v", svc.GetName(), md.GetName(), err)
 				return err
@@ -211,19 +213,88 @@ func (r *Registry) newMethod(svc *Service, md *descriptorpb.MethodDescriptorProt
 	return meth, nil
 }
 
-func extractAPIOptions(meth *descriptorpb.MethodDescriptorProto) (*options.HttpRule, error) {
+func extractAPIOptions(svc *Service, meth *descriptorpb.MethodDescriptorProto) (*options.HttpRule, error) {
+
+	// Exctract service options
+	if svc.Options == nil {
+		return nil, nil
+	}
+
+	if !proto.HasExtension(svc.Options, ragnarok.E_Endpoint) {
+		return nil, nil
+	}
+
+	s_ext := proto.GetExtension(svc.Options, ragnarok.E_Endpoint)
+	s_opts, ok := s_ext.(*ragnarok.EndpointOptions)
+	if !ok {
+		return nil, fmt.Errorf("proto service extension is %T; want an ragnarok.EndpointOptions", s_opts)
+	}
+
+	// Exctract method options
 	if meth.Options == nil {
 		return nil, nil
 	}
-	if !proto.HasExtension(meth.Options, options.E_Http) {
+
+	if !proto.HasExtension(meth.Options, ragnarok.E_Method) {
 		return nil, nil
 	}
-	ext := proto.GetExtension(meth.Options, options.E_Http)
-	opts, ok := ext.(*options.HttpRule)
+
+	m_ext := proto.GetExtension(meth.Options, ragnarok.E_Method)
+	m_opts, ok := m_ext.(*ragnarok.MethodSpec)
 	if !ok {
-		return nil, fmt.Errorf("extension is %T; want an HttpRule", ext)
+		return nil, fmt.Errorf("proto method extension is %T; want an ragnarok.MethodSpec", m_ext)
 	}
-	return opts, nil
+
+	// Generate the HttpRule on-fly
+	if m_opts.GetName() == "" {
+		log.Printf("ragnarok.MethodSpec is missing .name on method %q in service %q (generation is partially skipped)\n", svc.GetName(), meth.GetName())
+		return nil, nil
+	}
+
+	if m_opts.GetMethod() == "" {
+		return nil, fmt.Errorf("ragnarok.MethodSpec is missing .method on method %q in service %q (generation is partially skipped)\n", svc.GetName(), meth.GetName())
+	}
+
+	// Build the path according to the default method verbs
+	path := fmt.Sprintf("/%s/%s/%s", s_opts.GetGv().GetGroup(), s_opts.GetGv().GetVersion(), s_opts.GetAliases()[0])
+
+	nm := strings.ToLower(m_opts.GetName())
+	if m_opts.GetSearch() {
+		switch nm {
+		case "show":
+			path = fmt.Sprintf("%s/{UID}", path)
+		case "update":
+			path = fmt.Sprintf("%s/{UID}", path)
+		case "delete":
+			path = fmt.Sprintf("%s/{UID}", path)
+		default:
+			path = fmt.Sprintf("%s/%s", path, nm)
+		}
+	} else {
+		path = fmt.Sprintf("%s/%s", path, nm)
+	}
+
+	r_opts := &options.HttpRule{}
+
+	switch strings.ToUpper(m_opts.GetMethod()) {
+	case "GET":
+		r_opts.Pattern = &options.HttpRule_Get{Get: path}
+	case "PUT":
+		r_opts.Pattern = &options.HttpRule_Put{Put: path}
+	case "POST":
+		r_opts.Pattern = &options.HttpRule_Post{Post: path}
+	case "DELETE":
+		r_opts.Pattern = &options.HttpRule_Delete{Delete: path}
+	case "PATCH":
+		r_opts.Pattern = &options.HttpRule_Patch{Patch: path}
+	default:
+		r_opts.Pattern = &options.HttpRule_Custom{Custom: &options.CustomHttpPattern{
+			Kind: m_opts.GetMethod(),
+			Path: path,
+		}}
+	}
+
+	return r_opts, nil
 }
 
 func defaultAPIOptions(svc *Service, md *descriptorpb.MethodDescriptorProto) (*options.HttpRule, error) {

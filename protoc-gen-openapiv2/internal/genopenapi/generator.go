@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+
 	"strings"
 
+	ragnarok "github.com/OVH-Goldorack/ragnarok/protoc/descriptors"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/internal/descriptor"
 	gen "github.com/grpc-ecosystem/grpc-gateway/v2/internal/generator"
 	openapioptions "github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2/options"
@@ -401,6 +403,22 @@ func (g *generator) Generate(targets []*descriptor.File) ([]*descriptor.Response
 			grpclog.Infof("Processing %s", file.GetName())
 		}
 		swagger, err := applyTemplate(param{File: file, reg: g.reg})
+
+		// Inject OpenAPI info from custom ragnarok.Swagger
+		if file.Options != nil && proto.HasExtension(file.Options, ragnarok.E_Openapiv2Swagger) {
+			if ext, ok := proto.GetExtension(file.Options, ragnarok.E_Openapiv2Swagger).(*ragnarok.Swagger); ok {
+				if ext.GetTitle() != "" {
+					swagger.Info.Title = ext.GetTitle()
+				}
+				if ext.GetVersion() != "" {
+					swagger.Info.Version = ext.GetVersion()
+				}
+				if ext.GetDescription() != "" {
+					swagger.Info.Description = ext.GetDescription()
+				}
+			}
+		}
+
 		if errors.Is(err, errNoTargetService) {
 			if grpclog.V(1) {
 				grpclog.Infof("%s: %v", file.GetName(), err)
