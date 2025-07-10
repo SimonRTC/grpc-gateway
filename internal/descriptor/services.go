@@ -261,17 +261,17 @@ func extractAPIOptions(svc *Service, meth *descriptorpb.MethodDescriptorProto) (
 	nm := strings.ToLower(m_opts.GetName())
 	if m_opts.GetSearch() {
 		switch nm {
+		case "list":
+			// Skiped
 		case "show":
-			path = fmt.Sprintf("%s/{UID}", path)
-		case "update":
 			path = fmt.Sprintf("%s/{UID}", path)
 		case "delete":
 			path = fmt.Sprintf("%s/{UID}", path)
 		default:
-			path = fmt.Sprintf("%s/%s", path, nm)
+			path = fmt.Sprintf("%s/{UID}/%s", path, nm)
 		}
 	} else {
-		path = fmt.Sprintf("%s/%s", path, nm)
+		path = fmt.Sprintf("%s/{metadata.uid}/%s", path, nm)
 	}
 
 	r_opts := &options.HttpRule{}
